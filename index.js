@@ -9,54 +9,76 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🔹 Supabase client avec service key pour contourner RLS
+// 🔹 Supabase client
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// 🔹 Route test
-app.get("/", (req, res) => {
-  res.send("Wallet backend is running 🚀");
-});
+// 🔹 Test route
+app.get("/", (req, res) => res.send("Wallet backend is running 🚀"));
 
-// 🔹 Route test des variables d'environnement
-app.get("/test-env", (req, res) => {
-  res.json({
-    FEDA_API_KEY: process.env.FEDA_API_KEY || "undefined",
-    SUPABASE_URL: process.env.SUPABASE_URL || "undefined",
-    SUPABASE_SERVICE_KEY: process.env.SUPABASE_SERVICE_KEY ? "OK" : "undefined"
-  });
-});
-
-// 🔹 Route de test dépôt minimal
+// 🔹 Deposit route
 app.post("/deposit", async (req, res) => {
   try {
     const { userId, amount, phone } = req.body;
-
-    // Vérification simple
     if (!userId || !amount || !phone) {
       return res.status(400).json({ error: "Champs manquants" });
     }
 
-    console.log("Payload reçu :", { userId, amount, phone });
+    // 1️⃣ Créer transaction pending dans Supabase
+    const { data, error } = await supabase
+      .from("wallet_transactions")
+      .insert({
+        user_id: userId,
+        amount: amount,
+        transaction_type: "deposit",
+        status: "pending",
+        description: `Recharge portefeuille ID ${userId}`,
+        phone: phone
+      })
+      .select()
+      .single();
 
-    // Simuler une création de transaction
-    const fakeTransactionId = Math.floor(Math.random() * 1000000);
+    if (error) throw error;
+    const transactionId = data.id;
 
-    // Retourner URL factice
-    return res.json({
-      success: true,
-      payment_url: `https://sandbox.fedapay.com/fake-checkout/${fakeTransactionId}`
+    // 2️⃣ Créer transaction FedaPay sandbox
+    const response = await fetch("https://api-sandbox.fedapay.com/v1/transactions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.FEDA_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        description: `Recharge Wallet ID ${transactionId}`,
+        amount: amount,
+        currency: { iso: "XOF" },
+        customer: {
+          firstname: "Client",
+          lastname: "Wallet",
+          phone_number: phone,
+          email: "client@email.com"
+        },
+        // ✅ redirect_url réel pour tester la fin du paiement
+        redirect_url: "https://ton-site.com/test-success.html"
+      })
     });
+
+    const result = await response.json();
+    console.log("FedaPay response:", result);
+
+    if (!result || !result.url) {
+      return res.status(400).json({ error: "Erreur création transaction FedaPay" });
+    }
+
+    res.json({ success: true, payment_url: result.url });
 
   } catch (err) {
     console.error("Erreur /deposit :", err);
     res.status(500).json({ error: err.message });
   }
 });
-// 🔹 Lancer serveur
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
