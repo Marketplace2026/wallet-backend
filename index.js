@@ -7,13 +7,13 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🔑 Configuration FedaPay Sandbox
-FedaPay.setApiKey(process.env.FEDAPAY_SECRET_KEY);
+// 🔹 CONFIGURATION FedaPay SANDBOX
+FedaPay.setApiKey(process.env.FEDAPAY_SECRET_KEY); // mets ta clé sk_sandbox ici dans .env
 FedaPay.setEnvironment('sandbox');
 
 // 🧪 Route test
 app.get('/', (req, res) => {
-  res.send('Backend FedaPay OK');
+  res.send('Backend FedaPay OK 🚀');
 });
 
 // 💰 Route dépôt
@@ -28,11 +28,12 @@ app.post('/deposit', async (req, res) => {
       });
     }
 
+    // 🔹 Création de la transaction FedaPay
     const transaction = await FedaPay.Transaction.create({
       description: `Recharge wallet utilisateur ${userId}`,
-      amount: parseInt(amount),
+      amount: Number(amount),
       currency: { iso: "XOF" },
-      callback_url: "https://marketplace2026.github.io/MANG---March-Agricole/",
+      callback_url: "https://marketplace2026.github.io/MANG---March-Agricole/callback.html", // à remplacer par ta page callback réelle
       customer: {
         firstname: "Client",
         lastname: "Wallet",
@@ -41,6 +42,7 @@ app.post('/deposit', async (req, res) => {
       }
     });
 
+    // 🔹 Générer le lien de paiement
     await transaction.generateToken();
 
     return res.json({
@@ -49,7 +51,7 @@ app.post('/deposit', async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Erreur FedaPay complète:", error);
+    console.error("Erreur FedaPay:", error.response?.data || error.message);
 
     return res.status(500).json({
       success: false,
@@ -58,8 +60,8 @@ app.post('/deposit', async (req, res) => {
   }
 });
 
-// 🚀 Lancement serveur
+// 🚀 Démarrer le serveur
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Serveur démarré sur port ${PORT}`);
+  console.log(`Serveur démarré sur le port ${PORT}`);
 });
