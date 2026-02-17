@@ -1,32 +1,23 @@
-// index.js
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 
-dotenv.config(); // Charge les variables d'environnement depuis .env
+dotenv.config();
 
 const app = express();
 app.use(cors());
-app.use(express.json()); // Parse le JSON des requêtes
+app.use(express.json());
 
-// 🔹 Initialisation Supabase
+// 🔹 Supabase client avec service key pour contourner RLS
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// =============================
-// 🔹 Route racine (test backend)
+// 🔹 Route test
 app.get("/", (req, res) => {
   res.send("Wallet backend is running 🚀");
-});
-
-// 🔹 Route utilisateurs
-app.get("/users", async (req, res) => {
-  const { data, error } = await supabase.from("users").select("*");
-  if (error) return res.status(400).json(error);
-  res.json(data);
 });
 
 // 🔹 Route test des variables d'environnement
@@ -40,22 +31,24 @@ app.get("/test-env", (req, res) => {
 
 // =============================
 // 🔥 ROUTE DEPOSIT
+// =============================
 app.post("/deposit", async (req, res) => {
   try {
     const { userId, amount, phone } = req.body;
+    console.log("POST /deposit reçu :", req.body);
 
-    // Vérification des champs
+    // 🔹 Vérification des champs
     if (!userId || !amount || !phone) {
       return res.status(400).json({ error: "Champs manquants" });
     }
 
-    // 1️⃣ Créer une transaction pending dans Supabase
-    const { data, error } = await supabase
+    // 🔹 Créer transaction pending dans Supabase
+    const { data: walletData, error: walletError } = await supabase
       .from("wallet_transactions")
       .insert({
         user_id: userId,
         amount: amount,
-        transaction_type: "deposit", // ✅ Utiliser la colonne correcte
+        transaction_type: "deposit",
         status: "pending",
         description: `Recharge portefeuille ID utilisateur ${userId}`,
         phone: phone
@@ -63,11 +56,16 @@ app.post("/deposit", async (req, res) => {
       .select()
       .single();
 
-    if (error) throw error;
+    if (walletError) {
+      console.error("Erreur insertion Supabase:", walletError);
+      return res.status(500).json({ error: walletError.message, details: walletError.details });
+    }
 
-    const transactionId = data.id;
+    console.log("Transaction créée:", walletData);
 
-    // 2️⃣ Créer la transaction FedaPay (SANDBOX)
+    const transactionId = walletData.id;
+
+    // 🔹 Créer transaction FedaPay sandbox
     const response = await fetch("https://api-sandbox.fedapay.com/v1/transactions", {
       method: "POST",
       headers: {
@@ -84,21 +82,22 @@ app.post("/deposit", async (req, res) => {
           phone_number: phone,
           email: "client@email.com"
         },
-        redirect_url: "https://ton-frontend.com/deposit-success" // 🔹 À adapter à ton front
+        redirect_url: "https://ton-frontend.com/deposit-success"
       })
     });
 
-    const result = await response.json();
+    const fedapayResult = await response.json();
+    console.log("Réponse FedaPay :", fedapayResult);
 
-    // Vérifier si FedaPay a bien renvoyé un lien
-    if (!result || !result.id || !result.url) {
-      return res.status(400).json({ error: "Erreur création transaction FedaPay" });
+    if (!fedapayResult || !fedapayResult.id || !fedapayResult.url) {
+      return res.status(400).json({ error: "Erreur création transaction FedaPay", fedapayResult });
     }
 
-    // Retour vers le frontend
-    return res.json({
+    // 🔹 Retour frontend
+    res.json({
       success: true,
-      payment_url: result.url
+      payment_url: fedapayResult.url,
+      transactionId
     });
 
   } catch (err) {
@@ -107,7 +106,7 @@ app.post("/deposit", async (req, res) => {
   }
 });
 
-// 🔹 Lancer le serveur
+// 🔹 Lancer serveur
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
