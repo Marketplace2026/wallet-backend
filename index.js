@@ -22,6 +22,8 @@ app.get("/", (req, res) => res.send("Wallet backend is running 🚀"));
 app.post("/deposit", async (req, res) => {
   try {
     const { userId, amount, phone } = req.body;
+
+    // ✅ Vérification des champs
     if (!userId || !amount || !phone) {
       return res.status(400).json({ error: "Champs manquants" });
     }
@@ -31,48 +33,67 @@ app.post("/deposit", async (req, res) => {
       .from("wallet_transactions")
       .insert({
         user_id: userId,
-        amount: amount,
+        amount,
         transaction_type: "deposit",
         status: "pending",
         description: `Recharge portefeuille ID ${userId}`,
-        phone: phone
+        phone
       })
       .select()
       .single();
 
     if (error) throw error;
+
     const transactionId = data.id;
 
-    // 2️⃣ Créer transaction FedaPay sandbox
-    const response = await fetch("https://api-sandbox.fedapay.com/v1/transactions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.FEDA_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        description: `Recharge Wallet ID ${transactionId}`,
-        amount: amount,
-        currency: { iso: "XOF" },
-        customer: {
-          firstname: "Client",
-          lastname: "Wallet",
-          phone_number: phone,
-          email: "client@email.com"
+    // 2️⃣ Appel FedaPay sandbox
+    try {
+      const response = await fetch("https://api-sandbox.fedapay.com/v1/transactions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.FEDA_API_KEY}`,
+          "Content-Type": "application/json"
         },
-        // ✅ redirect_url réel pour tester la fin du paiement
-        redirect_url: "https://ton-site.com/test-success.html"
-      })
-    });
+        body: JSON.stringify({
+          description: `Recharge Wallet ID ${transactionId}`,
+          amount,
+          currency: { iso: "XOF" },
+          customer: {
+            firstname: "Client",
+            lastname: "Wallet",
+            phone_number: phone,
+            email: "client@email.com"
+          },
+          redirect_url: "https://ton-frontend.com/test-success.html"
+        })
+      });
 
-    const result = await response.json();
-    console.log("FedaPay response:", result);
+      const result = await response.json();
+      console.log("FedaPay response:", result);
 
-    if (!result || !result.url) {
-      return res.status(400).json({ error: "Erreur création transaction FedaPay" });
+      if (!result || !result.url) {
+        // 🔴 Mettre la transaction en failed
+        await supabase
+          .from("wallet_transactions")
+          .update({ status: "failed" })
+          .eq("id", transactionId);
+
+        return res.status(400).json({ error: "Erreur création transaction FedaPay" });
+      }
+
+      // ✅ Retour frontend avec lien paiement
+      return res.json({ success: true, payment_url: result.url });
+
+    } catch (err) {
+      // 🔴 En cas d'erreur fetch, marquer failed
+      await supabase
+        .from("wallet_transactions")
+        .update({ status: "failed" })
+        .eq("id", transactionId);
+
+      console.error("Erreur fetch FedaPay :", err);
+      return res.status(500).json({ error: "Erreur serveur FedaPay" });
     }
-
-    res.json({ success: true, payment_url: result.url });
 
   } catch (err) {
     console.error("Erreur /deposit :", err);
@@ -80,5 +101,6 @@ app.post("/deposit", async (req, res) => {
   }
 });
 
+// 🔹 Lancer serveur
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
