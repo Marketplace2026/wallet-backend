@@ -1,106 +1,65 @@
-import express from "express";
-import cors from "cors";
-import dotenv from "dotenv";
-import { createClient } from "@supabase/supabase-js";
-
-dotenv.config();
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const FedaPay = require('fedapay');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🔹 Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+// 🔑 Configuration FedaPay Sandbox
+FedaPay.setApiKey(process.env.FEDAPAY_SECRET_KEY);
+FedaPay.setEnvironment('sandbox');
 
-// 🔹 Test route
-app.get("/", (req, res) => res.send("Wallet backend is running 🚀"));
+// 🧪 Route test
+app.get('/', (req, res) => {
+  res.send('Backend FedaPay OK');
+});
 
-// 🔹 Deposit route
-app.post("/deposit", async (req, res) => {
+// 💰 Route dépôt
+app.post('/deposit', async (req, res) => {
   try {
     const { userId, amount, phone } = req.body;
 
-    // ✅ Vérification des champs
     if (!userId || !amount || !phone) {
-      return res.status(400).json({ error: "Champs manquants" });
-    }
-
-    // 1️⃣ Créer transaction pending dans Supabase
-    const { data, error } = await supabase
-      .from("wallet_transactions")
-      .insert({
-        user_id: userId,
-        amount,
-        transaction_type: "deposit",
-        status: "pending",
-        description: `Recharge portefeuille ID ${userId}`,
-        phone
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    const transactionId = data.id;
-
-    // 2️⃣ Appel FedaPay sandbox
-    try {
-      const response = await fetch("https://api-sandbox.fedapay.com/v1/transactions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.FEDA_API_KEY}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          description: `Recharge Wallet ID ${transactionId}`,
-          amount,
-          currency: { iso: "XOF" },
-          customer: {
-            firstname: "Client",
-            lastname: "Wallet",
-            phone_number: phone,
-            email: "client@email.com"
-          },
-          redirect_url: "https://ton-frontend.com/test-success.html"
-        })
+      return res.status(400).json({
+        success: false,
+        error: "Données manquantes"
       });
-
-      const result = await response.json();
-      console.log("FedaPay response:", result);
-
-      if (!result || !result.url) {
-        // 🔴 Mettre la transaction en failed
-        await supabase
-          .from("wallet_transactions")
-          .update({ status: "failed" })
-          .eq("id", transactionId);
-
-        return res.status(400).json({ error: "Erreur création transaction FedaPay" });
-      }
-
-      // ✅ Retour frontend avec lien paiement
-      return res.json({ success: true, payment_url: result.url });
-
-    } catch (err) {
-      // 🔴 En cas d'erreur fetch, marquer failed
-      await supabase
-        .from("wallet_transactions")
-        .update({ status: "failed" })
-        .eq("id", transactionId);
-
-      console.error("Erreur fetch FedaPay :", err);
-      return res.status(500).json({ error: "Erreur serveur FedaPay" });
     }
 
-  } catch (err) {
-    console.error("Erreur /deposit :", err);
-    res.status(500).json({ error: err.message });
+    const transaction = await FedaPay.Transaction.create({
+      description: `Recharge wallet utilisateur ${userId}`,
+      amount: parseInt(amount),
+      currency: { iso: "XOF" },
+      callback_url: "https://marketplace2026.github.io/MANG---March-Agricole/",
+      customer: {
+        firstname: "Client",
+        lastname: "Wallet",
+        phone_number: phone,
+        email: "client@test.com"
+      }
+    });
+
+    await transaction.generateToken();
+
+    return res.json({
+      success: true,
+      payment_url: transaction.token.url
+    });
+
+  } catch (error) {
+    console.error("Erreur FedaPay complète:", error);
+
+    return res.status(500).json({
+      success: false,
+      error: "Erreur serveur FedaPay"
+    });
   }
 });
 
-// 🔹 Lancer serveur
+// 🚀 Lancement serveur
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Serveur démarré sur port ${PORT}`);
+});
