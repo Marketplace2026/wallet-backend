@@ -1,21 +1,23 @@
+// index.js
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 
-dotenv.config();
+dotenv.config(); // Charge les variables d'environnement depuis .env
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json()); // Parse le JSON des requêtes
 
-// 🔹 Supabase client
+// 🔹 Initialisation Supabase
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// 🔹 Route test
+// =============================
+// 🔹 Route racine (test backend)
 app.get("/", (req, res) => {
   res.send("Wallet backend is running 🚀");
 });
@@ -26,15 +28,18 @@ app.get("/users", async (req, res) => {
   if (error) return res.status(400).json(error);
   res.json(data);
 });
+
+// 🔹 Route test des variables d'environnement
 app.get("/test-env", (req, res) => {
   res.json({
     FEDA_API_KEY: process.env.FEDA_API_KEY || "undefined",
     SUPABASE_URL: process.env.SUPABASE_URL || "undefined",
+    SUPABASE_SERVICE_KEY: process.env.SUPABASE_SERVICE_KEY ? "OK" : "undefined"
   });
 });
+
 // =============================
 // 🔥 ROUTE DEPOSIT
-// =============================
 app.post("/deposit", async (req, res) => {
   try {
     const { userId, amount, phone } = req.body;
@@ -44,13 +49,13 @@ app.post("/deposit", async (req, res) => {
       return res.status(400).json({ error: "Champs manquants" });
     }
 
-    // 1️⃣ Créer transaction pending dans Supabase
+    // 1️⃣ Créer une transaction pending dans Supabase
     const { data, error } = await supabase
       .from("wallet_transactions")
       .insert({
         user_id: userId,
         amount: amount,
-        transaction_type: "deposit", // ✅ colonne correcte
+        transaction_type: "deposit", // ✅ Utiliser la colonne correcte
         status: "pending",
         description: `Recharge portefeuille ID utilisateur ${userId}`,
         phone: phone
@@ -62,7 +67,7 @@ app.post("/deposit", async (req, res) => {
 
     const transactionId = data.id;
 
-    // 2️⃣ Créer transaction FedaPay sandbox
+    // 2️⃣ Créer la transaction FedaPay (SANDBOX)
     const response = await fetch("https://api-sandbox.fedapay.com/v1/transactions", {
       method: "POST",
       headers: {
@@ -79,18 +84,18 @@ app.post("/deposit", async (req, res) => {
           phone_number: phone,
           email: "client@email.com"
         },
-        redirect_url: "https://ton-frontend.com/deposit-success" // 🔹 optionnel
+        redirect_url: "https://ton-frontend.com/deposit-success" // 🔹 À adapter à ton front
       })
     });
 
     const result = await response.json();
 
-    // Vérification réponse FedaPay
+    // Vérifier si FedaPay a bien renvoyé un lien
     if (!result || !result.id || !result.url) {
       return res.status(400).json({ error: "Erreur création transaction FedaPay" });
     }
 
-    // Retour frontend
+    // Retour vers le frontend
     return res.json({
       success: true,
       payment_url: result.url
@@ -102,7 +107,7 @@ app.post("/deposit", async (req, res) => {
   }
 });
 
-// 🔹 Lancer serveur
+// 🔹 Lancer le serveur
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
