@@ -26,7 +26,12 @@ app.get("/users", async (req, res) => {
   if (error) return res.status(400).json(error);
   res.json(data);
 });
-
+app.get("/test-env", (req, res) => {
+  res.json({
+    FEDA_API_KEY: process.env.FEDA_API_KEY || "undefined",
+    SUPABASE_URL: process.env.SUPABASE_URL || "undefined",
+  });
+});
 // =============================
 // 🔥 ROUTE DEPOSIT
 // =============================
