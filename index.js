@@ -1,114 +1,209 @@
-import express from "express";
-import cors from "cors";
-import dotenv from "dotenv";
-import pkg from "pg";
-import fetch from "node-fetch";
-
-dotenv.config();
-const { Pool } = pkg;
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const { createClient } = require('@supabase/supabase-js');
+const axios = require('axios');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL
-});
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// ==========================
-// ROUTE TEST
-// ==========================
-app.get("/", (req, res) => {
-  res.send("Wallet backend is running 🚀");
-});
-
-// ==========================
-// INITIER RECHARGE
-// ==========================
-app.post("/init-deposit", async (req, res) => {
+// =====================
+// 🔹 Init Deposit
+// =====================
+app.post('/init-deposit', async (req, res) => {
   try {
-    const { userId, amount } = req.body;
-    if (!userId || !amount || amount <= 0)
-      return res.status(400).json({ error: "Montant invalide" });
+    const { userId, amount, operator, phone } = req.body;
+    if (!userId || !amount || !operator || !phone) {
+      return res.status(400).json({ success: false, error: "Données manquantes" });
+    }
 
-    const { rows } = await pool.query(
-      `select initiate_deposit($1,$2) as transaction_id`,
-      [userId, amount]
-    );
+    const transaction_id = uuidv4();
 
-    res.json({ success: true, transaction_id: rows[0].transaction_id });
+    // Créer transaction pending dans ta table cinetpay_transactions
+    const { error } = await supabase
+      .from('cinetpay_transactions')
+      .insert({
+        id: transaction_id,
+        user_id: userId,
+        amount,
+        operator,
+        phone,
+        transaction_type: 'deposit',
+        status: 'pending',
+        created_at: new Date()
+      });
+
+    if (error) throw error;
+
+    // Appel CinetPay API pour créer la transaction
+    const response = await axios.post('https://api.cinetpay.com/v1/payment', {
+      amount,
+      currency: 'XOF',
+      site_id: process.env.CINETPAY_SITE_ID,
+      transaction_id,
+      description: 'Recharge wallet',
+      customer_phone: phone,
+      notify_url: 'https://ton-serveur.com/webhook',
+      payment_method: operator
+    }, {
+      headers: {
+        'Authorization': `Bearer ${process.env.CINETPAY_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    // Retourner l'URL de paiement
+    return res.json({
+      success: true,
+      transaction_id,
+      payment_url: response.data.payment_url
+    });
+
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Erreur serveur" });
+    console.error("Erreur init-deposit:", err.response?.data || err.message);
+    res.status(500).json({ success: false, error: "Erreur serveur init-deposit" });
   }
 });
 
-// ==========================
-// SIMULER WEBHOOK (pour test)
-// ==========================
-app.post("/webhook", async (req, res) => {
+// =====================
+// 🔹 Request Withdrawal
+// =====================
+app.post('/request-withdrawal', async (req, res) => {
   try {
-    const { transaction_id, provider_transaction_id, status } = req.body;
+    const { userId, amount, operator, phone } = req.body;
+    if (!userId || !amount || !operator || !phone) {
+      return res.status(400).json({ success: false, error: "Données manquantes" });
+    }
 
-    if (!transaction_id || !status)
-      return res.status(400).json({ error: "Champs manquants" });
+    const transaction_id = uuidv4();
 
-    await pool.query(
-      `select cinetpay_webhook($1,$2,$3)`,
-      [transaction_id, provider_transaction_id || "TEST", status]
-    );
+    // Vérifier solde
+    const { data: userData, error: userError } = await supabase
+      .from('profiles')
+      .select('wallet_balance')
+      .eq('id', userId)
+      .single();
+    if (userError || !userData) throw new Error("Utilisateur introuvable");
 
-    res.json({ success: true });
+    if (userData.wallet_balance < amount) {
+      return res.status(400).json({ success: false, error: "Solde insuffisant" });
+    }
+
+    // Débiter solde immédiatement (ou tu peux le débiter lors de confirmation)
+    await supabase
+      .from('profiles')
+      .update({ wallet_balance: userData.wallet_balance - amount })
+      .eq('id', userId);
+
+    // Créer transaction pending
+    const { error } = await supabase
+      .from('cinetpay_transactions')
+      .insert({
+        id: transaction_id,
+        user_id: userId,
+        amount,
+        operator,
+        phone,
+        transaction_type: 'withdraw',
+        status: 'pending',
+        created_at: new Date()
+      });
+    if (error) throw error;
+
+    // Ici tu peux appeler API CinetPay pour payer le Mobile Money
+    // ... à faire quand tu auras la clé live
+
+    return res.json({
+      success: true,
+      transaction_id,
+      message: "Retrait initié, sera confirmé après paiement"
+    });
+
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Erreur webhook" });
+    console.error("Erreur request-withdrawal:", err.message);
+    res.status(500).json({ success: false, error: "Erreur serveur retrait" });
   }
 });
 
-// ==========================
-// DEMANDER UN RETRAIT
-// ==========================
-app.post("/request-withdrawal", async (req, res) => {
+// =====================
+// 🔹 Webhook CinetPay
+// =====================
+app.post('/webhook', async (req, res) => {
   try {
-    const { userId, amount } = req.body;
-    if (!userId || !amount || amount <= 0)
-      return res.status(400).json({ error: "Montant invalide" });
+    const { transaction_id, provider_transaction_id, status, secret } = req.body;
 
-    const { rows } = await pool.query(
-      `select request_withdrawal($1,$2) as transaction_id`,
-      [userId, amount]
-    );
+    // Vérifier secret
+    if (secret !== process.env.CINETPAY_WEBHOOK_SECRET) {
+      return res.status(403).send("Unauthorized");
+    }
 
-    res.json({ success: true, transaction_id: rows[0].transaction_id });
+    // Récupérer transaction
+    const { data: trx, error: trxError } = await supabase
+      .from('cinetpay_transactions')
+      .select('*')
+      .eq('id', transaction_id)
+      .single();
+    if (trxError || !trx) return res.status(404).send("Transaction introuvable");
+
+    if (trx.status !== 'pending') return res.send("Déjà traité");
+
+    // Mettre à jour transaction
+    await supabase
+      .from('cinetpay_transactions')
+      .update({ status, provider_transaction_id, updated_at: new Date() })
+      .eq('id', transaction_id);
+
+    // Si dépôt réussi → créditer utilisateur
+    if (status === 'success' && trx.transaction_type === 'deposit') {
+      const { data: user } = await supabase
+        .from('profiles')
+        .select('wallet_balance')
+        .eq('id', trx.user_id)
+        .single();
+      await supabase
+        .from('profiles')
+        .update({ wallet_balance: user.wallet_balance + trx.amount })
+        .eq('id', trx.user_id);
+
+      await supabase
+        .from('wallet_transactions')
+        .insert({
+          user_id: trx.user_id,
+          amount: trx.amount,
+          transaction_type: 'deposit',
+          status: 'success',
+          description: 'Recharge CinetPay',
+          operator: trx.operator,
+          phone: trx.phone
+        });
+    }
+
+    // Si retrait échoué → rembourser
+    if (status === 'failed' && trx.transaction_type === 'withdraw') {
+      const { data: user } = await supabase
+        .from('profiles')
+        .select('wallet_balance')
+        .eq('id', trx.user_id)
+        .single();
+      await supabase
+        .from('profiles')
+        .update({ wallet_balance: user.wallet_balance + trx.amount })
+        .eq('id', trx.user_id);
+    }
+
+    res.send("OK");
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error("Erreur webhook:", err.message);
+    res.status(500).send("Erreur serveur webhook");
   }
 });
 
-// ==========================
-// CONFIRMER RETRAIT
-// ==========================
-app.post("/confirm-withdrawal", async (req, res) => {
-  try {
-    const { transaction_id, status } = req.body;
-    if (!transaction_id || !status)
-      return res.status(400).json({ error: "Champs manquants" });
-
-    await pool.query(
-      `select cinetpay_webhook($1,$2,$3)`,
-      [transaction_id, "CINETPAY_PROVIDER_ID", status]
-    );
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Erreur confirmation" });
-  }
-});
-
-// ==========================
-// LANCER SERVEUR
-// ==========================
+// =====================
+// 🚀 Lancement serveur
+// =====================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Backend wallet live sur port ${PORT}`));
