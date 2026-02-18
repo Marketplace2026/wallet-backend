@@ -1,31 +1,15 @@
 {
   "name": "wallet-backend",
   "version": "1.0.0",
-  "description": "Backend pour recharges Wallet avec FedaPay Sandbox",
-  "main": "index.js",
-  "type": "commonjs",
+  "type": "module",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js"
-  },
-  "engines": {
-    "node": "20.x"
+    "start": "node index.js"
   },
   "dependencies": {
+    "express": "^4.18.2",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
-    "express": "^4.18.2",
-    "fedapay": "^1.0.4"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.2"
-  },
-  "keywords": [
-    "wallet",
-    "fedapay",
-    "backend",
-    "express"
-  ],
-  "author": "Baudler",
-  "license": "ISC"
-}r
+    "pg": "^8.12.0",
+    "node-fetch": "^3.3.2"
+  }
+}
