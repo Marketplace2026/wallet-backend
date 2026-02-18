@@ -1,10 +1,11 @@
 {
   "name": "wallet-backend",
   "version": "1.0.0",
-  "description": "Backend CinetPay pour wallet",
+  "description": "Backend wallet CinetPay / Supabase",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0",
